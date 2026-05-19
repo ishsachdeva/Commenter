@@ -37,6 +37,11 @@ button:hover {
   background: #1d4ed8;
 }
 
+button:disabled {
+  background: #93c5fd;
+  cursor: wait;
+}
+
 .card {
   background: #ffffff;
   border: 1px solid #e2e8f0;
@@ -53,4 +58,9 @@ h2 {
 
 .placeholder {
   min-height: 48px;
+  white-space: pre-wrap;
+}
+
+.error {
+  color: #b91c1c;
 }
