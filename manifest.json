@@ -3,7 +3,9 @@
   "name": "LinkedIn Comment Helper",
   "version": "1.0.0",
   "description": "Simple popup UI for generating LinkedIn comments.",
-  "permissions": [],
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
     "https://www.linkedin.com/*"
   ],
@@ -20,5 +22,6 @@
         "content.js"
       ]
     }
-  ]
+  ],
+  "options_page": "options.html"
 }
