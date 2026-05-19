@@ -3,33 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LinkedIn Comment Assistant</title>
-    <link rel="stylesheet" href="styles.css" />
+    <title>LinkedIn Comment Helper</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; padding: 12px; width: 260px; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      p { font-size: 12px; color: #444; margin: 0 0 10px; }
+      a, button { font-size: 12px; }
+      .row { display: flex; gap: 8px; }
+    </style>
   </head>
   <body>
-    <main class="popup">
-      <h1>LinkedIn Comment Assistant</h1>
-
-      <button id="generateBtn" type="button">Generate Comments</button>
-
-      <section id="errorPanel" class="error-panel" aria-live="polite" hidden>
-        <h2>Error</h2>
-        <p id="errorMessage"></p>
-      </section>
-
-      <section class="card" aria-labelledby="summary-title">
-        <h2 id="summary-title">Summary</h2>
-        <div id="summary" class="placeholder"></div>
-      </section>
-
-      <section class="card" aria-labelledby="comments-title">
-        <h2 id="comments-title">Suggested Comments</h2>
-        <div id="suggestedComments" class="placeholder"></div>
-        <p id="commentStatus" class="comment-status" aria-live="polite"></p>
-        <p class="small-note">You can edit before posting.</p>
-      </section>
-    </main>
-
+    <h1>LinkedIn Comment Helper</h1>
+    <p>Use the inline <strong>AI Comment</strong> button on LinkedIn posts.</p>
+    <div class="row">
+      <button id="openOptions" type="button">Open Settings</button>
+      <a href="https://www.linkedin.com/feed/" target="_blank" rel="noreferrer">Open LinkedIn</a>
+    </div>
     <script src="popup.js"></script>
   </body>
 </html>

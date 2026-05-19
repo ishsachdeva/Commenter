@@ -1,290 +1,253 @@
-const UI_NOISE_PHRASES = [
-  'Like',
-  'Comment',
-  'Repost',
-  'Send',
-  'Share',
-  'Follow',
-  'Promoted',
-  'Sponsored'
-];
+const MODEL_NAME = 'gpt-4o-mini';
+const UI_NOISE_PHRASES = ['Like', 'Comment', 'Repost', 'Send', 'Share', 'Follow', 'Promoted', 'Sponsored'];
+const BUTTON_ATTR = 'data-ai-comment-button';
+const PANEL_ID = 'ai-comment-panel';
 
-function isElementVisible(element) {
-  if (!element || !(element instanceof HTMLElement)) {
-    return false;
-  }
-
+function isVisible(element) {
+  if (!(element instanceof HTMLElement)) return false;
   const style = window.getComputedStyle(element);
-  if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
-    return false;
-  }
-
+  if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
   const rect = element.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) {
-    return false;
-  }
-
-  return rect.bottom > 0 && rect.top < window.innerHeight;
+  return rect.width > 0 && rect.height > 0;
 }
 
-function getFeedPostCandidates() {
-  const selectors = [
-    'div.feed-shared-update-v2',
-    'div[data-urn*="activity"]',
-    'article[data-id]',
-    'main [role="article"]',
-    '.scaffold-finite-scroll__content > div > div'
-  ];
-
-  const nodes = new Set();
-  for (const selector of selectors) {
-    document.querySelectorAll(selector).forEach((node) => nodes.add(node));
-  }
-
-  return Array.from(nodes).filter((node) => {
-    if (!(node instanceof HTMLElement)) {
-      return false;
-    }
-
-    if (!isElementVisible(node)) {
-      return false;
-    }
-
-    // Filter out tiny utility containers.
-    const rect = node.getBoundingClientRect();
-    return rect.height > 140;
-  });
+function escapeHtml(value) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
-function selectBestVisiblePost(posts) {
-  if (!posts.length) {
-    return null;
-  }
-
-  const viewportTop = 0;
-  const viewportCenterY = window.innerHeight / 2;
-
-  return posts
-    .map((post) => {
-      const rect = post.getBoundingClientRect();
-      const postCenterY = rect.top + rect.height / 2;
-      const topDistance = Math.abs(rect.top - viewportTop);
-      const centerDistance = Math.abs(postCenterY - viewportCenterY);
-      // Weighted for "near top" but still factoring center proximity.
-      const score = topDistance * 0.6 + centerDistance * 0.4;
-      return { post, score };
-    })
-    .sort((a, b) => a.score - b.score)[0].post;
+function injectStyles() {
+  if (document.getElementById('ai-comment-inline-style')) return;
+  const style = document.createElement('style');
+  style.id = 'ai-comment-inline-style';
+  style.textContent = `
+    .ai-comment-btn { margin-left: 8px; border: 1px solid #0a66c2; background: #fff; color: #0a66c2; border-radius: 16px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+    .ai-comment-btn:hover { background: #eef5fc; }
+    .ai-comment-panel { position: fixed; z-index: 999999; width: 320px; max-height: 60vh; overflow: auto; background: #fff; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.2); padding: 10px; }
+    .ai-comment-panel h4 { margin: 0 0 6px 0; font-size: 13px; }
+    .ai-comment-summary { font-size: 12px; margin-bottom: 8px; color: #333; }
+    .ai-comment-item { border: 1px solid #e5e5e5; border-radius: 8px; padding: 8px; margin: 6px 0; cursor: pointer; font-size: 12px; }
+    .ai-comment-item:hover { background: #f7f9fb; }
+    .ai-comment-meta { font-size: 11px; color: #666; margin-bottom: 4px; }
+    .ai-comment-error { color: #b00020; font-size: 12px; }
+  `;
+  document.head.appendChild(style);
 }
 
-function cleanPostText(rawText) {
-  if (!rawText) {
-    return '';
-  }
+function closestCommentContainer(editor) {
+  return editor.closest('form, .comments-comment-box, .comments-comment-item, [role="region"], .feed-shared-update-v2') || editor.parentElement;
+}
 
+function findLikelyPostContainer(start) {
+  let node = start;
+  for (let i = 0; i < 9 && node; i += 1) {
+    const text = (node.innerText || '').trim();
+    if (text.length > 120) return node;
+    node = node.parentElement;
+  }
+  return start.closest('article, [role="article"], section, div') || start;
+}
+
+function cleanText(rawText) {
   const lines = rawText
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
-    .filter((line) => {
-      if (/^(\d+\s*)?(like|comment|repost|send|share|follow)s?$/i.test(line)) {
-        return false;
-      }
-
-      return !UI_NOISE_PHRASES.includes(line);
-    });
+    .filter((line) => !UI_NOISE_PHRASES.includes(line))
+    .filter((line) => !/^(like|comment|repost|send|follow|share)$/i.test(line));
 
   const deduped = [];
   for (const line of lines) {
-    if (deduped[deduped.length - 1] !== line) {
-      deduped.push(line);
-    }
+    if (deduped[deduped.length - 1] !== line) deduped.push(line);
   }
-
   return deduped.join('\n').trim();
 }
 
-function extractPostText(post) {
-  if (!post) {
-    return '';
-  }
-
-  const textSelectors = [
-    '.update-components-text',
-    '.feed-shared-update-v2__description',
-    '.feed-shared-inline-show-more-text',
-    '[data-test-id="main-feed-activity-card__commentary"]',
-    '[dir="ltr"]'
-  ];
-
-  const textChunks = [];
-  for (const selector of textSelectors) {
-    const nodes = post.querySelectorAll(selector);
-    nodes.forEach((node) => {
-      const text = node.textContent?.trim();
-      if (text) {
-        textChunks.push(text);
-      }
-    });
-    if (textChunks.length) {
-      break;
+function extractVisibleText(container) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent || !isVisible(parent)) return NodeFilter.FILTER_REJECT;
+      const value = node.nodeValue?.trim();
+      if (!value) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
     }
+  });
+
+  const chunks = [];
+  while (walker.nextNode()) {
+    chunks.push(walker.currentNode.nodeValue.trim());
   }
 
-  const fallbackText = post.innerText || post.textContent || '';
-  const candidateText = textChunks.length ? textChunks.join('\n') : fallbackText;
-  const cleaned = cleanPostText(candidateText);
-
-  if (!cleaned && textChunks.length === 0) {
-    return '__DOM_CHANGED__';
-  }
-
-  return cleaned;
+  return cleanText(chunks.join('\n'));
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getCommentButton(post) {
-  const buttonSelectors = [
-    'button[aria-label*="Comment" i]',
-    'button[aria-label*="comment" i]',
-    'button[data-control-name*="comment" i]',
-    '[role="button"][aria-label*="Comment" i]'
-  ];
-
-  for (const selector of buttonSelectors) {
-    const button = post.querySelector(selector);
-    if (button instanceof HTMLElement && isElementVisible(button)) {
-      return button;
-    }
-  }
-
-  return null;
-}
-
-function findCommentEditor(post) {
-  const editors = post.querySelectorAll('[contenteditable="true"]');
+function findNearestEditor(sourceElement) {
+  const base = sourceElement.closest('form, .comments-comment-box, .comments-comment-item, [role="article"], article') || sourceElement.parentElement;
+  if (!base) return null;
+  const editors = base.querySelectorAll('[contenteditable="true"], div[role="textbox"]');
   for (const editor of editors) {
-    if (!(editor instanceof HTMLElement)) {
-      continue;
-    }
-
-    const isLikelyCommentEditor =
-      editor.matches('[role="textbox"]') ||
-      /comment/i.test(editor.getAttribute('aria-label') || '') ||
-      /comment/i.test(editor.getAttribute('data-placeholder') || '');
-
-    if (isLikelyCommentEditor && isElementVisible(editor)) {
-      return editor;
-    }
+    if (editor instanceof HTMLElement && isVisible(editor)) return editor;
   }
-
   return null;
-}
-
-async function ensureCommentEditor(post) {
-  let editor = findCommentEditor(post);
-  if (editor) {
-    return editor;
-  }
-
-  const commentButton = getCommentButton(post);
-  if (commentButton) {
-    commentButton.click();
-    await sleep(250);
-  }
-
-  editor = findCommentEditor(post);
-  return editor;
 }
 
 function setEditorText(editor, text) {
   editor.focus();
-
   const selection = window.getSelection();
   const range = document.createRange();
   range.selectNodeContents(editor);
   range.deleteContents();
   range.insertNode(document.createTextNode(text));
   range.collapse(false);
-
-  if (selection) {
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
-
+  selection?.removeAllRanges();
+  selection?.addRange(range);
   editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
   editor.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-async function insertComment(comment) {
-  const posts = getFeedPostCandidates();
-  const bestPost = selectBestVisiblePost(posts);
-
-  if (!bestPost) {
-    return { success: false, error: 'No visible post found.' };
+function safelyParseAiJson(rawText) {
+  const cleaned = (rawText || '').trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '').trim();
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (typeof parsed?.summary !== 'string' || !Array.isArray(parsed?.comments) || parsed.comments.length !== 4) return null;
+    if (!parsed.comments.every((c) => typeof c?.style === 'string' && typeof c?.text === 'string')) return null;
+    return parsed;
+  } catch {
+    return null;
   }
-
-  const editor = await ensureCommentEditor(bestPost);
-
-  if (!editor) {
-    return { success: false, error: 'Comment box not found. LinkedIn DOM changed or comments are unavailable.' };
-  }
-
-  setEditorText(editor, comment);
-  return { success: true };
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!message) {
-    return false;
+async function getStoredApiKey() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['aiApiKey'], (result) => resolve(result?.aiApiKey?.trim() || ''));
+  });
+}
+
+async function generateSuggestions(postText, apiKey) {
+  const prompt = `You are helping write LinkedIn comments. Respond with strict JSON only, with no markdown and no extra keys:\n{\n  "summary": "...",\n  "comments": [\n    {"style": "Insightful", "text": "..."},\n    {"style": "Supportive", "text": "..."},\n    {"style": "Question-based", "text": "..."},\n    {"style": "Contrarian", "text": "..."}\n  ]\n}\n\nPost text:\n${postText}`;
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: MODEL_NAME,
+      temperature: 0.7,
+      messages: [
+        { role: 'system', content: 'Return only valid JSON that matches the required schema exactly.' },
+        { role: 'user', content: prompt }
+      ]
+    })
+  });
+
+  if (!response.ok) throw new Error(`AI API request failed with status ${response.status}`);
+  const data = await response.json();
+  return data?.choices?.[0]?.message?.content || '';
+}
+
+function closePanel() {
+  document.getElementById(PANEL_ID)?.remove();
+}
+
+function showPanelNear(button, html) {
+  closePanel();
+  const panel = document.createElement('section');
+  panel.className = 'ai-comment-panel';
+  panel.id = PANEL_ID;
+  panel.innerHTML = html;
+  document.body.appendChild(panel);
+  const rect = button.getBoundingClientRect();
+  panel.style.top = `${Math.min(window.innerHeight - 20, rect.bottom + 8)}px`;
+  panel.style.left = `${Math.max(8, Math.min(window.innerWidth - panel.offsetWidth - 8, rect.left))}px`;
+}
+
+async function onAiCommentClick(button, editor) {
+  showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-summary">Generating suggestions…</div>');
+
+  const postContainer = findLikelyPostContainer(closestCommentContainer(editor) || editor);
+  const postText = extractVisibleText(postContainer);
+  if (!postText || postText.length < 80) {
+    showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-error">Not enough post text found near this comment area.</div>');
+    return;
   }
 
-  if (message.action === 'GET_VISIBLE_POST_TEXT') {
-    try {
-      const posts = getFeedPostCandidates();
-      const bestPost = selectBestVisiblePost(posts);
-      const postText = extractPostText(bestPost);
-
-      if (postText === '__DOM_CHANGED__') {
-        sendResponse({
-          success: false,
-          postText: '',
-          error: 'LinkedIn DOM changed: selectors matched but no text found.'
-        });
-        return true;
-      }
-
-      sendResponse({
-        success: Boolean(postText),
-        postText: postText || '',
-        error: postText ? undefined : 'No visible post text found.'
-      });
-    } catch (error) {
-      sendResponse({
-        success: false,
-        postText: '',
-        error: error instanceof Error ? error.message : 'Unknown extraction error.'
-      });
-    }
-
-    return true;
+  const apiKey = await getStoredApiKey();
+  if (!apiKey) {
+    showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-error">Missing API key. Set it in Options.</div>');
+    return;
   }
 
-  if (message.action === 'INSERT_COMMENT') {
-    insertComment(message.comment || '')
-      .then((result) => sendResponse(result))
-      .catch((error) =>
-        sendResponse({
-          success: false,
-          error: error instanceof Error ? error.message : 'Unknown insert error.'
-        }),
-      );
+  try {
+    const aiText = await generateSuggestions(postText, apiKey);
+    const parsed = safelyParseAiJson(aiText);
+    if (!parsed) throw new Error('Invalid AI JSON');
 
-    return true;
+    const cards = parsed.comments
+      .map((c, idx) => `<div class="ai-comment-item" data-idx="${idx}"><div class="ai-comment-meta">${escapeHtml(c.style)}</div>${escapeHtml(c.text)}</div>`)
+      .join('');
+
+    showPanelNear(button, `<h4>AI Comment</h4><div class="ai-comment-summary">${escapeHtml(parsed.summary)}</div>${cards}`);
+    const panel = document.getElementById(PANEL_ID);
+    panel?.addEventListener('click', (event) => {
+      const item = event.target instanceof Element ? event.target.closest('.ai-comment-item') : null;
+      if (!item) return;
+      const idx = Number(item.getAttribute('data-idx'));
+      const targetEditor = findNearestEditor(button) || editor;
+      const text = parsed.comments[idx]?.text;
+      if (targetEditor && text) setEditorText(targetEditor, text);
+    });
+  } catch (error) {
+    showPanelNear(button, `<h4>AI Comment</h4><div class="ai-comment-error">${escapeHtml(error instanceof Error ? error.message : 'Generation failed')}</div>`);
   }
+}
 
-  return false;
+function insertAiButtonForEditor(editor) {
+  if (!(editor instanceof HTMLElement) || !isVisible(editor)) return;
+  if (editor.dataset.aiCommentBound === '1') return;
+
+  const anchor = editor.closest('.comments-comment-box__form-container, form, .comments-comment-box, .feed-shared-social-action-bar') || editor.parentElement;
+  if (!anchor || anchor.querySelector(`[${BUTTON_ATTR}="1"]`)) return;
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'ai-comment-btn';
+  button.textContent = 'AI Comment';
+  button.setAttribute(BUTTON_ATTR, '1');
+  button.addEventListener('click', () => onAiCommentClick(button, editor));
+
+  anchor.appendChild(button);
+  editor.dataset.aiCommentBound = '1';
+}
+
+function scanAndInject() {
+  const editors = document.querySelectorAll('[contenteditable="true"], div[role="textbox"]');
+  editors.forEach((editor) => {
+    const text = (editor.getAttribute('aria-label') || '') + (editor.getAttribute('data-placeholder') || '');
+    const looksLikeComment = /comment|reply/i.test(text) || !!editor.closest('[aria-label*="Comment" i], [class*="comment" i], form');
+    if (looksLikeComment) insertAiButtonForEditor(editor);
+  });
+
+  const commentButtons = Array.from(document.querySelectorAll('button, [role="button"]')).filter((el) => /comment/i.test(el.textContent || ''));
+  commentButtons.forEach((btn) => {
+    const container = btn.closest('article, [role="article"], section, div');
+    if (!container) return;
+    const editor = container.querySelector('[contenteditable="true"], div[role="textbox"]');
+    if (editor) insertAiButtonForEditor(editor);
+  });
+}
+
+injectStyles();
+scanAndInject();
+const observer = new MutationObserver(() => scanAndInject());
+observer.observe(document.body, { childList: true, subtree: true });
+
+document.addEventListener('click', (event) => {
+  const panel = document.getElementById(PANEL_ID);
+  if (!panel) return;
+  const target = event.target;
+  if (target instanceof Node && !panel.contains(target) && !(target instanceof Element && target.matches(`.ai-comment-btn,[${BUTTON_ATTR}]`))) closePanel();
 });
