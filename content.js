@@ -26,13 +26,20 @@ function injectStyles() {
   style.textContent = `
     .ai-comment-btn { margin-left: 8px; border: 1px solid #0a66c2; background: #fff; color: #0a66c2; border-radius: 16px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
     .ai-comment-btn:hover { background: #eef5fc; }
-    .ai-comment-panel { position: fixed; z-index: 999999; width: 320px; max-height: 60vh; overflow: auto; background: #fff; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.2); padding: 10px; }
+    .ai-comment-panel { position: fixed; z-index: 999999; width: min(92vw, 700px); min-width: 320px; max-height: 60vh; overflow: auto; background: #fff; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.2); padding: 12px; }
     .ai-comment-panel h4 { margin: 0 0 6px 0; font-size: 13px; }
     .ai-comment-summary { font-size: 12px; margin-bottom: 8px; color: #333; }
-    .ai-comment-item { border: 1px solid #e5e5e5; border-radius: 8px; padding: 8px; margin: 6px 0; cursor: pointer; font-size: 12px; }
-    .ai-comment-item:hover { background: #f7f9fb; }
+    .ai-comment-result-layout { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(280px, 1.6fr); gap: 12px; align-items: start; }
+    .ai-comment-summary-column, .ai-comment-comments-column { min-width: 0; }
+    .ai-comment-comments-column { display: grid; gap: 6px; }
+    .ai-comment-card { border: 1px solid #e5e5e5; border-radius: 8px; padding: 8px; cursor: pointer; font-size: 12px; background: #fff; }
+    .ai-comment-card:hover { background: #f7f9fb; }
     .ai-comment-meta { font-size: 11px; color: #666; margin-bottom: 4px; }
     .ai-comment-error { color: #b00020; font-size: 12px; }
+    @media (max-width: 700px) {
+      .ai-comment-panel { width: min(94vw, 640px); min-width: 0; }
+      .ai-comment-result-layout { grid-template-columns: 1fr; }
+    }
   `;
   document.head.appendChild(style);
 }
@@ -235,13 +242,26 @@ async function onAiCommentClick(button, editor) {
     const parsed = result.data;
 
     const cards = parsed.comments
-      .map((c, idx) => `<div class="ai-comment-item" data-idx="${idx}"><div class="ai-comment-meta">${escapeHtml(c.style)}</div>${escapeHtml(c.text)}</div>`)
+      .map((c, idx) => `<div class="ai-comment-card" data-idx="${idx}"><div class="ai-comment-meta">${escapeHtml(c.style)}</div>${escapeHtml(c.text)}</div>`)
       .join('');
 
-    showPanelNear(button, `<h4>AI Comment</h4><div class="ai-comment-summary">${escapeHtml(parsed.summary)}</div>${cards}`);
+    showPanelNear(
+      button,
+      `<h4>AI Comment</h4>
+      <div class="ai-comment-result-layout">
+        <div class="ai-comment-summary-column">
+          <h4>Summary</h4>
+          <div class="ai-comment-summary">${escapeHtml(parsed.summary)}</div>
+        </div>
+        <div class="ai-comment-comments-column">
+          <h4>Suggested Comments</h4>
+          ${cards}
+        </div>
+      </div>`
+    );
     const panel = document.getElementById(PANEL_ID);
     panel?.addEventListener('click', (event) => {
-      const item = event.target instanceof Element ? event.target.closest('.ai-comment-item') : null;
+      const item = event.target instanceof Element ? event.target.closest('.ai-comment-card') : null;
       if (!item) return;
       const idx = Number(item.getAttribute('data-idx'));
       const targetEditor = findNearestEditor(button) || editor;
