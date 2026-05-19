@@ -136,28 +136,140 @@ function extractPostText(post) {
   return cleanPostText(candidateText);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getCommentButton(post) {
+  const buttonSelectors = [
+    'button[aria-label*="Comment" i]',
+    'button[aria-label*="comment" i]',
+    'button[data-control-name*="comment" i]',
+    '[role="button"][aria-label*="Comment" i]'
+  ];
+
+  for (const selector of buttonSelectors) {
+    const button = post.querySelector(selector);
+    if (button instanceof HTMLElement && isElementVisible(button)) {
+      return button;
+    }
+  }
+
+  return null;
+}
+
+function findCommentEditor(post) {
+  const editors = post.querySelectorAll('[contenteditable="true"]');
+  for (const editor of editors) {
+    if (!(editor instanceof HTMLElement)) {
+      continue;
+    }
+
+    const isLikelyCommentEditor =
+      editor.matches('[role="textbox"]') ||
+      /comment/i.test(editor.getAttribute('aria-label') || '') ||
+      /comment/i.test(editor.getAttribute('data-placeholder') || '');
+
+    if (isLikelyCommentEditor && isElementVisible(editor)) {
+      return editor;
+    }
+  }
+
+  return null;
+}
+
+async function ensureCommentEditor(post) {
+  let editor = findCommentEditor(post);
+  if (editor) {
+    return editor;
+  }
+
+  const commentButton = getCommentButton(post);
+  if (commentButton) {
+    commentButton.click();
+    await sleep(250);
+  }
+
+  editor = findCommentEditor(post);
+  return editor;
+}
+
+function setEditorText(editor, text) {
+  editor.focus();
+
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  range.deleteContents();
+  range.insertNode(document.createTextNode(text));
+  range.collapse(false);
+
+  if (selection) {
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+  editor.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+async function insertComment(comment) {
+  const posts = getFeedPostCandidates();
+  const bestPost = selectBestVisiblePost(posts);
+
+  if (!bestPost) {
+    return { success: false, error: 'No visible post found.' };
+  }
+
+  const editor = await ensureCommentEditor(bestPost);
+
+  if (!editor) {
+    return { success: false, error: 'Comment editor not found.' };
+  }
+
+  setEditorText(editor, comment);
+  return { success: true };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!message || message.action !== 'GET_VISIBLE_POST_TEXT') {
+  if (!message) {
     return false;
   }
 
-  try {
-    const posts = getFeedPostCandidates();
-    const bestPost = selectBestVisiblePost(posts);
-    const postText = extractPostText(bestPost);
+  if (message.action === 'GET_VISIBLE_POST_TEXT') {
+    try {
+      const posts = getFeedPostCandidates();
+      const bestPost = selectBestVisiblePost(posts);
+      const postText = extractPostText(bestPost);
 
-    sendResponse({
-      success: Boolean(postText),
-      text: postText || '',
-      error: postText ? undefined : 'No visible post text found.'
-    });
-  } catch (error) {
-    sendResponse({
-      success: false,
-      text: '',
-      error: error instanceof Error ? error.message : 'Unknown extraction error.'
-    });
+      sendResponse({
+        success: Boolean(postText),
+        postText: postText || '',
+        error: postText ? undefined : 'No visible post text found.'
+      });
+    } catch (error) {
+      sendResponse({
+        success: false,
+        postText: '',
+        error: error instanceof Error ? error.message : 'Unknown extraction error.'
+      });
+    }
+
+    return true;
   }
 
-  return true;
+  if (message.action === 'INSERT_COMMENT') {
+    insertComment(message.comment || '')
+      .then((result) => sendResponse(result))
+      .catch((error) =>
+        sendResponse({
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown insert error.'
+        }),
+      );
+
+    return true;
+  }
+
+  return false;
 });
