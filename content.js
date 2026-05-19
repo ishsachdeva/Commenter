@@ -1,4 +1,3 @@
-const MODEL_NAME = 'gpt-4o-mini';
 const UI_NOISE_PHRASES = ['Like', 'Comment', 'Repost', 'Send', 'Share', 'Follow', 'AI Comment', 'Add a comment', 'Promoted', 'Sponsored', 'Suggested'];
 const BUTTON_ATTR = 'data-ai-comment-button';
 const PANEL_ID = 'ai-comment-panel';
@@ -195,45 +194,6 @@ function setEditorText(editor, text) {
   editor.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-function safelyParseAiJson(rawText) {
-  const cleaned = (rawText || '').trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '').trim();
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (typeof parsed?.summary !== 'string' || !Array.isArray(parsed?.comments) || parsed.comments.length !== 4) return null;
-    if (!parsed.comments.every((c) => typeof c?.style === 'string' && typeof c?.text === 'string')) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-async function getStoredApiKey() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['aiApiKey'], (result) => resolve(result?.aiApiKey?.trim() || ''));
-  });
-}
-
-async function generateSuggestions(postText, apiKey) {
-  const prompt = `You are helping write LinkedIn comments. Respond with strict JSON only, with no markdown and no extra keys:\n{\n  "summary": "...",\n  "comments": [\n    {"style": "Insightful", "text": "..."},\n    {"style": "Supportive", "text": "..."},\n    {"style": "Question-based", "text": "..."},\n    {"style": "Contrarian", "text": "..."}\n  ]\n}\n\nPost text:\n${postText}`;
-
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: MODEL_NAME,
-      temperature: 0.7,
-      messages: [
-        { role: 'system', content: 'Return only valid JSON that matches the required schema exactly.' },
-        { role: 'user', content: prompt }
-      ]
-    })
-  });
-
-  if (!response.ok) throw new Error(`AI API request failed with status ${response.status}`);
-  const data = await response.json();
-  return data?.choices?.[0]?.message?.content || '';
-}
-
 function closePanel() {
   document.getElementById(PANEL_ID)?.remove();
 }
@@ -269,16 +229,10 @@ async function onAiCommentClick(button, editor) {
     return;
   }
 
-  const apiKey = await getStoredApiKey();
-  if (!apiKey) {
-    showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-error">Missing API key. Set it in Options.</div>');
-    return;
-  }
-
   try {
-    const aiText = await generateSuggestions(postText, apiKey);
-    const parsed = safelyParseAiJson(aiText);
-    if (!parsed) throw new Error('Invalid AI JSON');
+    const result = await chrome.runtime.sendMessage({ action: 'GENERATE_COMMENTS', postText });
+    if (!result?.ok) throw new Error(result?.error || 'Generation failed');
+    const parsed = result.data;
 
     const cards = parsed.comments
       .map((c, idx) => `<div class="ai-comment-item" data-idx="${idx}"><div class="ai-comment-meta">${escapeHtml(c.style)}</div>${escapeHtml(c.text)}</div>`)

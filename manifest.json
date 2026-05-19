@@ -8,7 +8,7 @@
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
-    "https://api.openai.com/*"
+    "https://openrouter.ai/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -24,5 +24,8 @@
       ]
     }
   ],
-  "options_page": "options.html"
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js"
+  }
 }
