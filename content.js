@@ -83,6 +83,18 @@ function findNearestPostContainer(startElement) {
   return null;
 }
 
+function extractFromExpandableTextBox(container) {
+  if (!container) return '';
+  const nodes = Array.from(container.querySelectorAll('[data-testid="expandable-text-box"]'))
+    .filter((node) => node instanceof HTMLElement && isVisible(node));
+  const rawText = nodes.map((node) => node.innerText || '').join('\n');
+  const cleaned = cleanLinkedInText(rawText);
+  console.log(`[AI Comment] expandable-text-box count: ${nodes.length}`);
+  console.log('[AI Comment] expandable-text-box extracted text:', cleaned);
+  console.log(`[AI Comment] expandable-text-box cleaned length: ${cleaned.length}`);
+  return cleaned;
+}
+
 function extractVisibleText(container) {
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
@@ -100,6 +112,18 @@ function extractVisibleText(container) {
   }
 
   return cleanLinkedInText(chunks.join('\n'));
+}
+
+function extractPostText(candidateContainer) {
+  const primary = extractFromExpandableTextBox(candidateContainer);
+  if (primary) {
+    console.log(`[AI Comment] final cleaned length: ${primary.length}`);
+    return primary;
+  }
+  const fallback = candidateContainer ? extractVisibleText(candidateContainer) : '';
+  console.log('[AI Comment] fallback extracted text:', fallback);
+  console.log(`[AI Comment] final cleaned length: ${fallback.length}`);
+  return fallback;
 }
 
 function findNearestEditor(sourceElement) {
@@ -184,9 +208,15 @@ function showPanelNear(button, html) {
 async function onAiCommentClick(button, editor) {
   showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-summary">Generating suggestions…</div>');
 
-  const postContainer = findNearestPostContainer(button);
-  const postText = postContainer ? extractVisibleText(postContainer) : '';
-  if (!postText || postText.length < 150) {
+  const postContainer = findNearestPostContainer(editor) || findNearestPostContainer(button);
+  const postText = extractPostText(postContainer);
+
+  showPanelNear(
+    button,
+    `<h4>AI Comment</h4><div class="ai-comment-summary">Extracted post text preview:</div><pre style="white-space: pre-wrap; font-size: 11px; max-height: 160px; overflow: auto; background: #f7f9fb; padding: 8px; border-radius: 6px;">${escapeHtml(postText || '(empty)')}</pre><div class="ai-comment-summary">Generating suggestions…</div>`
+  );
+
+  if (!postText || postText.length < 40) {
     showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-error">Not enough post text found near this comment area.</div>');
     return;
   }
