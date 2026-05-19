@@ -64,3 +64,22 @@ h2 {
 .error {
   color: #b91c1c;
 }
+
+.error-panel {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.error-panel h2 {
+  color: #b91c1c;
+  margin-bottom: 4px;
+}
+
+.error-panel p {
+  margin: 0;
+  color: #9f1239;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
