@@ -40,6 +40,24 @@ const getVisiblePostText = async () => {
   return chrome.tabs.sendMessage(activeTab.id, { action: 'GET_VISIBLE_POST_TEXT' });
 };
 
+const getActiveTabId = async () => {
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (!activeTab?.id) {
+    throw new Error('No active tab found.');
+  }
+
+  return activeTab.id;
+};
+
+const insertCommentIntoPage = async (commentText) => {
+  const tabId = await getActiveTabId();
+  return chrome.tabs.sendMessage(tabId, {
+    action: 'INSERT_COMMENT',
+    comment: commentText,
+  });
+};
+
 const getStoredApiKey = () =>
   new Promise((resolve) => {
     chrome.storage.local.get(['aiApiKey'], (result) => {
@@ -120,13 +138,42 @@ const renderSuggestions = (result) => {
     .map((comment) => {
       const style = escapeHtml(comment.style);
       const text = escapeHtml(comment.text);
-      return `<article class="comment-card"><h3>${style}</h3><p>${text}</p></article>`;
+      return `<article class="comment-card" data-comment="${text}"><h3>${style}</h3><p>${text}</p></article>`;
     })
     .join('');
 
   suggestedCommentsElement.innerHTML = cardsHtml;
   suggestedCommentsElement.classList.remove('placeholder', 'error');
 };
+
+if (suggestedCommentsElement) {
+  suggestedCommentsElement.addEventListener('click', async (event) => {
+    const card = event.target instanceof Element ? event.target.closest('.comment-card') : null;
+
+    if (!card) {
+      return;
+    }
+
+    const commentText = card.getAttribute('data-comment')?.trim();
+
+    if (!commentText) {
+      setCommentsMessage('Selected comment is empty.', true);
+      return;
+    }
+
+    try {
+      const response = await insertCommentIntoPage(commentText);
+
+      if (!response?.success) {
+        throw new Error(response?.error || 'Failed to insert comment.');
+      }
+
+      setCommentsMessage('Comment inserted into LinkedIn editor.', false);
+    } catch {
+      setCommentsMessage('Could not insert comment into LinkedIn.', true);
+    }
+  });
+}
 
 if (generateButton) {
   generateButton.addEventListener('click', async () => {
