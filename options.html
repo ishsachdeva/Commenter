@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Extension Options</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 24px;
+        max-width: 520px;
+      }
+
+      h1 {
+        margin-top: 0;
+        font-size: 1.4rem;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+      }
+
+      input {
+        width: 100%;
+        padding: 8px;
+        box-sizing: border-box;
+        margin-bottom: 12px;
+      }
+
+      button {
+        padding: 8px 14px;
+        cursor: pointer;
+      }
+
+      #status {
+        margin-left: 10px;
+        color: #1b7f2a;
+        font-size: 0.9rem;
+        opacity: 0;
+        transition: opacity 0.2s ease-in-out;
+      }
+
+      #status.visible {
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Options</h1>
+    <label for="apiKey">AI API Key</label>
+    <input id="apiKey" type="password" placeholder="Enter your API key" autocomplete="off" />
+    <button id="saveButton" type="button">Save</button>
+    <span id="status" role="status" aria-live="polite">Saved</span>
+
+    <script src="options.js"></script>
+  </body>
+</html>
