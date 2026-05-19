@@ -3,6 +3,7 @@ const summaryElement = document.getElementById('summary');
 const suggestedCommentsElement = document.getElementById('suggestedComments');
 const errorPanel = document.getElementById('errorPanel');
 const errorMessageElement = document.getElementById('errorMessage');
+const commentStatusElement = document.getElementById('commentStatus');
 
 const MODEL_NAME = 'gpt-4o-mini';
 const MIN_POST_TEXT_LENGTH = 80;
@@ -57,6 +58,15 @@ const setCommentsMessage = (message, isError = false) => {
 
   suggestedCommentsElement.textContent = message;
   suggestedCommentsElement.classList.toggle('error', isError);
+};
+
+const setCommentStatus = (message, isError = false) => {
+  if (!commentStatusElement) {
+    return;
+  }
+
+  commentStatusElement.textContent = message;
+  commentStatusElement.classList.toggle('error', isError);
 };
 
 const escapeHtml = (value) =>
@@ -216,6 +226,7 @@ const renderSuggestions = (result) => {
 
   suggestedCommentsElement.innerHTML = cardsHtml;
   suggestedCommentsElement.classList.remove('placeholder', 'error');
+  setCommentStatus('Click a comment card to insert it into LinkedIn.', false);
 };
 
 if (suggestedCommentsElement) {
@@ -230,7 +241,7 @@ if (suggestedCommentsElement) {
 
     if (!commentText) {
       showError('UNKNOWN');
-      setCommentsMessage('Selected comment is empty.', true);
+      setCommentStatus('Selected comment is empty.', true);
       return;
     }
 
@@ -239,15 +250,15 @@ if (suggestedCommentsElement) {
 
       if (!response?.success) {
         showError(mapContentScriptErrorToCode(response?.error));
-        setCommentsMessage('Could not insert comment into LinkedIn.', true);
+        setCommentStatus('Could not insert comment into LinkedIn.', true);
         return;
       }
 
       clearError();
-      setCommentsMessage('Comment inserted into LinkedIn editor.', false);
+      setCommentStatus('Comment inserted into LinkedIn editor.', false);
     } catch (error) {
       showError(error instanceof Error ? error.message : 'UNKNOWN');
-      setCommentsMessage('Could not insert comment into LinkedIn.', true);
+      setCommentStatus('Could not insert comment into LinkedIn.', true);
     }
   });
 }
@@ -259,6 +270,7 @@ if (generateButton) {
     clearError();
     setSummaryMessage('Looking for the visible LinkedIn post...');
     setCommentsMessage('Preparing suggestions...');
+    setCommentStatus('');
 
     try {
       const response = await getVisiblePostText();
@@ -269,6 +281,7 @@ if (generateButton) {
         showError(code);
         setSummaryMessage('Could not read the current post.', true);
         setCommentsMessage('No comments generated.', true);
+        setCommentStatus('');
         return;
       }
 
@@ -276,6 +289,7 @@ if (generateButton) {
         showError('NO_VISIBLE_POST_FOUND');
         setSummaryMessage('No visible post found on this page.', true);
         setCommentsMessage('No comments generated.', true);
+        setCommentStatus('');
         return;
       }
 
@@ -283,6 +297,7 @@ if (generateButton) {
         showError('POST_TEXT_TOO_SHORT');
         setSummaryMessage('Visible post text is too short.', true);
         setCommentsMessage('No comments generated.', true);
+        setCommentStatus('');
         return;
       }
 
@@ -292,6 +307,7 @@ if (generateButton) {
         showError('API_KEY_MISSING');
         setSummaryMessage('Missing API key.', true);
         setCommentsMessage('Add your API key in Options, then try again.', true);
+        setCommentStatus('');
         return;
       }
 
@@ -305,6 +321,7 @@ if (generateButton) {
         showError('AI_INVALID_JSON');
         setSummaryMessage('AI response format was invalid.', true);
         setCommentsMessage('Failed to generate comments.', true);
+        setCommentStatus('');
         return;
       }
 
@@ -314,6 +331,7 @@ if (generateButton) {
       showError(error instanceof Error ? error.message : 'UNKNOWN');
       setSummaryMessage('Could not generate suggestions. Please try again.', true);
       setCommentsMessage('Failed to generate comments.', true);
+      setCommentStatus('');
     } finally {
       generateButton.disabled = false;
       generateButton.textContent = 'Generate Comments';
