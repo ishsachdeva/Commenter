@@ -1,5 +1,5 @@
 const MODEL_NAME = 'gpt-4o-mini';
-const UI_NOISE_PHRASES = ['Like', 'Comment', 'Repost', 'Send', 'Share', 'Follow', 'Promoted', 'Sponsored'];
+const UI_NOISE_PHRASES = ['Like', 'Comment', 'Repost', 'Send', 'Share', 'Follow', 'AI Comment', 'Add a comment', 'Promoted', 'Sponsored'];
 const BUTTON_ATTR = 'data-ai-comment-button';
 const PANEL_ID = 'ai-comment-panel';
 
@@ -38,33 +38,49 @@ function injectStyles() {
   document.head.appendChild(style);
 }
 
-function closestCommentContainer(editor) {
-  return editor.closest('form, .comments-comment-box, .comments-comment-item, [role="region"], .feed-shared-update-v2') || editor.parentElement;
-}
+function cleanLinkedInText(text) {
+  if (!text) return '';
 
-function findLikelyPostContainer(start) {
-  let node = start;
-  for (let i = 0; i < 9 && node; i += 1) {
-    const text = (node.innerText || '').trim();
-    if (text.length > 120) return node;
-    node = node.parentElement;
-  }
-  return start.closest('article, [role="article"], section, div') || start;
-}
-
-function cleanText(rawText) {
-  const lines = rawText
+  const lines = text
     .split('\n')
-    .map((line) => line.trim())
+    .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean)
     .filter((line) => !UI_NOISE_PHRASES.includes(line))
-    .filter((line) => !/^(like|comment|repost|send|follow|share)$/i.test(line));
+    .filter((line) => !/^(like|comment|repost|send|follow|share|ai comment|add a comment)$/i.test(line));
 
   const deduped = [];
   for (const line of lines) {
     if (deduped[deduped.length - 1] !== line) deduped.push(line);
   }
-  return deduped.join('\n').trim();
+
+  return deduped.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function hasMeaningfulSentenceLikeText(text) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const sentenceCount = text.split(/[.!?]+/).map((s) => s.trim()).filter((s) => s.split(/\s+/).length >= 4).length;
+  return words.length >= 25 && sentenceCount >= 2;
+}
+
+function findNearestPostContainer(startElement) {
+  let node = startElement;
+
+  for (let level = 0; level < 10 && node; level += 1) {
+    const visible = isVisible(node);
+    const rawText = visible ? (node.innerText || '') : '';
+    const cleanedText = cleanLinkedInText(rawText);
+    console.log(`[AI Comment] Parent level ${level}`, node);
+    console.log(`[AI Comment] Parent level ${level} cleaned text length: ${cleanedText.length}`);
+
+    if (visible && cleanedText.length > 150 && hasMeaningfulSentenceLikeText(cleanedText)) {
+      console.log(`[AI Comment] Selected post container at level ${level}`, node);
+      return node;
+    }
+
+    node = node.parentElement;
+  }
+
+  return null;
 }
 
 function extractVisibleText(container) {
@@ -83,7 +99,7 @@ function extractVisibleText(container) {
     chunks.push(walker.currentNode.nodeValue.trim());
   }
 
-  return cleanText(chunks.join('\n'));
+  return cleanLinkedInText(chunks.join('\n'));
 }
 
 function findNearestEditor(sourceElement) {
@@ -168,9 +184,9 @@ function showPanelNear(button, html) {
 async function onAiCommentClick(button, editor) {
   showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-summary">Generating suggestions…</div>');
 
-  const postContainer = findLikelyPostContainer(closestCommentContainer(editor) || editor);
-  const postText = extractVisibleText(postContainer);
-  if (!postText || postText.length < 80) {
+  const postContainer = findNearestPostContainer(button);
+  const postText = postContainer ? extractVisibleText(postContainer) : '';
+  if (!postText || postText.length < 150) {
     showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-error">Not enough post text found near this comment area.</div>');
     return;
   }
