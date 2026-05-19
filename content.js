@@ -1,5 +1,5 @@
 const MODEL_NAME = 'gpt-4o-mini';
-const UI_NOISE_PHRASES = ['Like', 'Comment', 'Repost', 'Send', 'Share', 'Follow', 'AI Comment', 'Add a comment', 'Promoted', 'Sponsored'];
+const UI_NOISE_PHRASES = ['Like', 'Comment', 'Repost', 'Send', 'Share', 'Follow', 'AI Comment', 'Add a comment', 'Promoted', 'Sponsored', 'Suggested'];
 const BUTTON_ATTR = 'data-ai-comment-button';
 const PANEL_ID = 'ai-comment-panel';
 
@@ -60,6 +60,51 @@ function hasMeaningfulSentenceLikeText(text) {
   const words = text.split(/\s+/).filter(Boolean);
   const sentenceCount = text.split(/[.!?]+/).map((s) => s.trim()).filter((s) => s.split(/\s+/).length >= 4).length;
   return words.length >= 25 && sentenceCount >= 2;
+}
+
+
+function getScreenPositionPostText(button) {
+  if (!(button instanceof HTMLElement)) return '';
+
+  const buttonRect = button.getBoundingClientRect();
+  const allCandidates = Array.from(document.querySelectorAll('[data-testid="expandable-text-box"]'));
+  console.log(`[AI Comment] total expandable-text-box candidates: ${allCandidates.length}`);
+
+  const valid = [];
+  for (const candidate of allCandidates) {
+    if (!(candidate instanceof HTMLElement)) continue;
+    if (!isVisible(candidate)) continue;
+
+    const candidateRect = candidate.getBoundingClientRect();
+    const distance = buttonRect.top - candidateRect.bottom;
+    if (!(candidateRect.bottom < buttonRect.top)) continue;
+    if (!(distance < 1200)) continue;
+
+    const rawText = (candidate.innerText || '').trim();
+    valid.push({ candidate, rawText, distance });
+  }
+
+  console.log(`[AI Comment] visible candidates found: ${valid.length}`);
+  valid.forEach((entry, index) => {
+    console.log(`[AI Comment] candidate ${index} text length: ${entry.rawText.length}`);
+    console.log(`[AI Comment] candidate ${index} vertical distance from button: ${Math.round(entry.distance)}`);
+  });
+
+  valid.sort((a, b) => a.distance - b.distance);
+
+  const selected = valid[0];
+  console.log('[AI Comment] selected candidate text:', selected?.rawText || '');
+
+  let cleaned = cleanLinkedInText(selected?.rawText || '');
+
+  if (cleaned.length < 40) {
+    const combinedRaw = valid.slice(0, 3).map((entry) => entry.rawText).join('\n');
+    const combinedCleaned = cleanLinkedInText(combinedRaw);
+    if (combinedCleaned.length > 40) cleaned = combinedCleaned;
+  }
+
+  console.log(`[AI Comment] final cleaned text length: ${cleaned.length}`);
+  return cleaned;
 }
 
 function findNearestPostContainer(startElement) {
@@ -208,8 +253,11 @@ function showPanelNear(button, html) {
 async function onAiCommentClick(button, editor) {
   showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-summary">Generating suggestions…</div>');
 
-  const postContainer = findNearestPostContainer(editor) || findNearestPostContainer(button);
-  const postText = extractPostText(postContainer);
+  let postText = getScreenPositionPostText(button);
+  if (!postText) {
+    const postContainer = findNearestPostContainer(editor) || findNearestPostContainer(button);
+    postText = extractPostText(postContainer);
+  }
 
   showPanelNear(
     button,
