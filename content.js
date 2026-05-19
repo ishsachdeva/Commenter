@@ -133,7 +133,13 @@ function extractPostText(post) {
 
   const fallbackText = post.innerText || post.textContent || '';
   const candidateText = textChunks.length ? textChunks.join('\n') : fallbackText;
-  return cleanPostText(candidateText);
+  const cleaned = cleanPostText(candidateText);
+
+  if (!cleaned && textChunks.length === 0) {
+    return '__DOM_CHANGED__';
+  }
+
+  return cleaned;
 }
 
 function sleep(ms) {
@@ -224,7 +230,7 @@ async function insertComment(comment) {
   const editor = await ensureCommentEditor(bestPost);
 
   if (!editor) {
-    return { success: false, error: 'Comment editor not found.' };
+    return { success: false, error: 'Comment box not found. LinkedIn DOM changed or comments are unavailable.' };
   }
 
   setEditorText(editor, comment);
@@ -241,6 +247,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const posts = getFeedPostCandidates();
       const bestPost = selectBestVisiblePost(posts);
       const postText = extractPostText(bestPost);
+
+      if (postText === '__DOM_CHANGED__') {
+        sendResponse({
+          success: false,
+          postText: '',
+          error: 'LinkedIn DOM changed: selectors matched but no text found.'
+        });
+        return true;
+      }
 
       sendResponse({
         success: Boolean(postText),

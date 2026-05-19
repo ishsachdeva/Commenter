@@ -1,8 +1,45 @@
 const generateButton = document.getElementById('generateBtn');
 const summaryElement = document.getElementById('summary');
 const suggestedCommentsElement = document.getElementById('suggestedComments');
+const errorPanel = document.getElementById('errorPanel');
+const errorMessageElement = document.getElementById('errorMessage');
 
 const MODEL_NAME = 'gpt-4o-mini';
+const MIN_POST_TEXT_LENGTH = 80;
+
+const ERROR_MESSAGES = {
+  NOT_ON_LINKEDIN: 'Open linkedin.com and try again. This tool only works on LinkedIn pages.',
+  NO_VISIBLE_POST_FOUND: 'No visible LinkedIn post was found. Scroll so a post is clearly visible, then retry.',
+  POST_TEXT_TOO_SHORT:
+    'The visible post text is too short to generate useful comments. Open a longer post and try again.',
+  API_KEY_MISSING: 'Missing API key. Add it in the extension Options page, then try again.',
+  AI_INVALID_JSON:
+    'The AI response could not be read. Please retry. If it keeps happening, lower post complexity and try again.',
+  COMMENT_BOX_NOT_FOUND:
+    'Could not find the LinkedIn comment box for the selected post. Open comments manually and retry.',
+  LINKEDIN_DOM_CHANGED:
+    'LinkedIn page structure looks different than expected. Refresh LinkedIn and try again.',
+  UNKNOWN: 'Something went wrong. Please try again.'
+};
+
+const clearError = () => {
+  if (!errorPanel || !errorMessageElement) {
+    return;
+  }
+
+  errorPanel.hidden = true;
+  errorMessageElement.textContent = '';
+};
+
+const showError = (errorCode) => {
+  if (!errorPanel || !errorMessageElement) {
+    return;
+  }
+
+  const message = ERROR_MESSAGES[errorCode] || ERROR_MESSAGES.UNKNOWN;
+  errorPanel.hidden = false;
+  errorMessageElement.textContent = message;
+};
 
 const setSummaryMessage = (message, isError = false) => {
   if (!summaryElement) {
@@ -30,21 +67,51 @@ const escapeHtml = (value) =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 
+const mapContentScriptErrorToCode = (errorText = '') => {
+  const value = errorText.toLowerCase();
+
+  if (value.includes('no visible post')) {
+    return 'NO_VISIBLE_POST_FOUND';
+  }
+
+  if (value.includes('no visible post text')) {
+    return 'NO_VISIBLE_POST_FOUND';
+  }
+
+  if (value.includes('comment editor not found') || value.includes('comment box not found')) {
+    return 'COMMENT_BOX_NOT_FOUND';
+  }
+
+  if (value.includes('dom changed') || value.includes('selectors matched but no text')) {
+    return 'LINKEDIN_DOM_CHANGED';
+  }
+
+  return 'UNKNOWN';
+};
+
 const getVisiblePostText = async () => {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (!activeTab?.id) {
-    throw new Error('No active tab found.');
+    throw new Error('UNKNOWN');
   }
 
-  return chrome.tabs.sendMessage(activeTab.id, { action: 'GET_VISIBLE_POST_TEXT' });
+  if (!activeTab.url || !activeTab.url.includes('linkedin.com')) {
+    throw new Error('NOT_ON_LINKEDIN');
+  }
+
+  try {
+    return await chrome.tabs.sendMessage(activeTab.id, { action: 'GET_VISIBLE_POST_TEXT' });
+  } catch {
+    throw new Error('LINKEDIN_DOM_CHANGED');
+  }
 };
 
 const getActiveTabId = async () => {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (!activeTab?.id) {
-    throw new Error('No active tab found.');
+    throw new Error('UNKNOWN');
   }
 
   return activeTab.id;
@@ -52,10 +119,15 @@ const getActiveTabId = async () => {
 
 const insertCommentIntoPage = async (commentText) => {
   const tabId = await getActiveTabId();
-  return chrome.tabs.sendMessage(tabId, {
-    action: 'INSERT_COMMENT',
-    comment: commentText,
-  });
+
+  try {
+    return await chrome.tabs.sendMessage(tabId, {
+      action: 'INSERT_COMMENT',
+      comment: commentText
+    });
+  } catch {
+    throw new Error('LINKEDIN_DOM_CHANGED');
+  }
 };
 
 const getStoredApiKey = () =>
@@ -89,7 +161,7 @@ const safelyParseAiJson = (rawText) => {
     }
 
     const hasValidComments = parsed.comments.every(
-      (comment) => typeof comment?.style === 'string' && typeof comment?.text === 'string',
+      (comment) => typeof comment?.style === 'string' && typeof comment?.text === 'string'
     );
 
     return hasValidComments ? parsed : null;
@@ -105,7 +177,7 @@ const generateSuggestions = async (postText, apiKey) => {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${apiKey}`
     },
     body: JSON.stringify({
       model: MODEL_NAME,
@@ -113,14 +185,14 @@ const generateSuggestions = async (postText, apiKey) => {
       messages: [
         {
           role: 'system',
-          content: 'Return only valid JSON that matches the required schema exactly.',
+          content: 'Return only valid JSON that matches the required schema exactly.'
         },
         {
           role: 'user',
-          content: prompt,
-        },
-      ],
-    }),
+          content: prompt
+        }
+      ]
+    })
   });
 
   if (!response.ok) {
@@ -157,6 +229,7 @@ if (suggestedCommentsElement) {
     const commentText = card.getAttribute('data-comment')?.trim();
 
     if (!commentText) {
+      showError('UNKNOWN');
       setCommentsMessage('Selected comment is empty.', true);
       return;
     }
@@ -165,11 +238,15 @@ if (suggestedCommentsElement) {
       const response = await insertCommentIntoPage(commentText);
 
       if (!response?.success) {
-        throw new Error(response?.error || 'Failed to insert comment.');
+        showError(mapContentScriptErrorToCode(response?.error));
+        setCommentsMessage('Could not insert comment into LinkedIn.', true);
+        return;
       }
 
+      clearError();
       setCommentsMessage('Comment inserted into LinkedIn editor.', false);
-    } catch {
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'UNKNOWN');
       setCommentsMessage('Could not insert comment into LinkedIn.', true);
     }
   });
@@ -179,6 +256,7 @@ if (generateButton) {
   generateButton.addEventListener('click', async () => {
     generateButton.disabled = true;
     generateButton.textContent = 'Loading...';
+    clearError();
     setSummaryMessage('Looking for the visible LinkedIn post...');
     setCommentsMessage('Preparing suggestions...');
 
@@ -186,8 +264,24 @@ if (generateButton) {
       const response = await getVisiblePostText();
       const postText = response?.postText?.trim();
 
+      if (!response?.success && response?.error) {
+        const code = mapContentScriptErrorToCode(response.error);
+        showError(code);
+        setSummaryMessage('Could not read the current post.', true);
+        setCommentsMessage('No comments generated.', true);
+        return;
+      }
+
       if (!postText) {
+        showError('NO_VISIBLE_POST_FOUND');
         setSummaryMessage('No visible post found on this page.', true);
+        setCommentsMessage('No comments generated.', true);
+        return;
+      }
+
+      if (postText.length < MIN_POST_TEXT_LENGTH) {
+        showError('POST_TEXT_TOO_SHORT');
+        setSummaryMessage('Visible post text is too short.', true);
         setCommentsMessage('No comments generated.', true);
         return;
       }
@@ -195,7 +289,8 @@ if (generateButton) {
       const apiKey = await getStoredApiKey();
 
       if (!apiKey) {
-        setSummaryMessage('Missing API key. Please add it in the extension options page.', true);
+        showError('API_KEY_MISSING');
+        setSummaryMessage('Missing API key.', true);
         setCommentsMessage('Add your API key in Options, then try again.', true);
         return;
       }
@@ -207,11 +302,16 @@ if (generateButton) {
       const parsed = safelyParseAiJson(aiText);
 
       if (!parsed) {
-        throw new Error('Invalid JSON format returned by AI model.');
+        showError('AI_INVALID_JSON');
+        setSummaryMessage('AI response format was invalid.', true);
+        setCommentsMessage('Failed to generate comments.', true);
+        return;
       }
 
+      clearError();
       renderSuggestions(parsed);
     } catch (error) {
+      showError(error instanceof Error ? error.message : 'UNKNOWN');
       setSummaryMessage('Could not generate suggestions. Please try again.', true);
       setCommentsMessage('Failed to generate comments.', true);
     } finally {
