@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LinkedIn Comment Helper</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <h1>LinkedIn Comment Helper</h1>
+
+      <button id="generateBtn" type="button">Generate Comments</button>
+
+      <section class="card" aria-labelledby="summary-title">
+        <h2 id="summary-title">Summary</h2>
+        <div id="summary" class="placeholder"></div>
+      </section>
+
+      <section class="card" aria-labelledby="comments-title">
+        <h2 id="comments-title">Suggested Comments</h2>
+        <div id="suggestedComments" class="placeholder"></div>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

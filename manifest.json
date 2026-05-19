@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn Comment Helper",
+  "version": "1.0.0",
+  "description": "Simple popup UI for generating LinkedIn comments.",
+  "permissions": [],
+  "host_permissions": [
+    "https://www.linkedin.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LinkedIn Comment Helper"
+  }
+}
