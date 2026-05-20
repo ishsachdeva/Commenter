@@ -1,5 +1,12 @@
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL_NAME = 'openrouter/free';
+const MODEL_FALLBACKS = [
+  'openrouter/free',
+  'openai/gpt-oss-20b:free',
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'qwen/qwen3-next-80b-a3b-instruct:free',
+  'google/gemma-3-27b-it:free',
+  'deepseek/deepseek-chat-v3-0324:free'
+];
 
 function stripMarkdownCodeFences(text) {
   return (text || '')
@@ -111,45 +118,64 @@ function buildUserPrompt(postText) {
   return `POST:\n\n${postText}\n\nReturn only valid minified JSON. No markdown. No explanation. No code fence. Use exactly this schema:\n{"summary":"...","comments":[{"style":"Insightful","text":"..."},{"style":"Supportive","text":"..."},{"style":"Question","text":"..."},{"style":"Contrarian","text":"..."}]}`;
 }
 
+function shouldTryNextModel(status, text) {
+  if (status === 429 || status === 404) return true;
+  if (status >= 400) {
+    const low = String(text || '').toLowerCase();
+    if (low.includes('model') && (low.includes('invalid') || low.includes('not found') || low.includes('unknown'))) return true;
+  }
+  return false;
+}
+
 async function generateComments(postText, apiKey) {
-  const response = await fetch(OPENROUTER_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: MODEL_NAME,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: 'You generate high-quality LinkedIn comment suggestions.' },
-        { role: 'user', content: buildUserPrompt(postText) }
-      ]
-    })
-  });
+  const messages = [
+    { role: 'system', content: 'You generate high-quality LinkedIn comment suggestions.' },
+    { role: 'user', content: buildUserPrompt(postText) }
+  ];
 
-  const rawResponseText = await response.text();
-  if (!response.ok) {
-    throw new Error(`OpenRouter request failed (${response.status}): ${rawResponseText.slice(0, 200) || response.statusText}`);
+  for (const model of MODEL_FALLBACKS) {
+    const response = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model,
+        response_format: { type: 'json_object' },
+        messages
+      })
+    });
+
+    const rawResponseText = await response.text();
+    console.log('[OpenRouter] Attempt', { model, status: response.status, preview: rawResponseText.slice(0, 200) });
+
+    if (!response.ok) {
+      if (shouldTryNextModel(response.status, rawResponseText)) continue;
+      throw new Error(`OpenRouter request failed (${response.status}): ${rawResponseText.slice(0, 200) || response.statusText}`);
+    }
+
+    let data;
+    try {
+      data = JSON.parse(rawResponseText);
+    } catch {
+      throw new Error('Invalid JSON received from OpenRouter API');
+    }
+
+    const modelContent = String(data?.choices?.[0]?.message?.content || '');
+    console.log('Raw AI content preview:', modelContent.slice(0, 300));
+
+    const parsed = parseAiJson(modelContent);
+    if (!parsed.ok) {
+      console.log('Raw AI output (unparsed):', modelContent);
+      throw new Error(parsed.error);
+    }
+
+    console.log('[OpenRouter] Selected successful model:', model);
+    return parsed.data;
   }
 
-  let data;
-  try {
-    data = JSON.parse(rawResponseText);
-  } catch {
-    throw new Error('Invalid JSON received from OpenRouter API');
-  }
-
-  const modelContent = String(data?.choices?.[0]?.message?.content || '');
-  console.log('Raw AI content preview:', modelContent.slice(0, 300));
-
-  const parsed = parseAiJson(modelContent);
-  if (!parsed.ok) {
-    console.log('Raw AI output (unparsed):', modelContent);
-    throw new Error(parsed.error);
-  }
-
-  return parsed.data;
+  throw new Error('All free models are currently unavailable or rate-limited. Please try again later.');
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
