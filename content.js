@@ -1,6 +1,7 @@
 const UI_NOISE_PHRASES = ['Like', 'Comment', 'Repost', 'Send', 'Share', 'Follow', 'AI Comment', 'Add a comment', 'Promoted', 'Sponsored', 'Suggested'];
 const BUTTON_ATTR = 'data-ai-comment-button';
 const PANEL_ID = 'ai-comment-panel';
+let panelState = null;
 
 function isVisible(element) {
   if (!(element instanceof HTMLElement)) return false;
@@ -26,7 +27,7 @@ function injectStyles() {
   style.textContent = `
     .ai-comment-btn { margin-left: 8px; border: 1px solid #0a66c2; background: #fff; color: #0a66c2; border-radius: 16px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
     .ai-comment-btn:hover { background: #eef5fc; }
-    .ai-comment-panel { position: fixed; z-index: 999999; width: min(92vw, 700px); min-width: 320px; max-height: 60vh; overflow: auto; background: #fff; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.2); padding: 12px; }
+    .ai-comment-panel { position: absolute; z-index: 999999; width: min(92vw, 700px); min-width: 320px; max-width: 700px; max-height: 60vh; overflow: auto; background: #fff; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.2); padding: 12px; }
     .ai-comment-panel h4 { margin: 0 0 6px 0; font-size: 13px; }
     .ai-comment-summary { font-size: 12px; margin-bottom: 8px; color: #333; }
     .ai-comment-result-layout { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(280px, 1.6fr); gap: 12px; align-items: start; }
@@ -202,19 +203,68 @@ function setEditorText(editor, text) {
 }
 
 function closePanel() {
+  if (panelState) {
+    window.removeEventListener('scroll', panelState.onViewportChange, true);
+    window.removeEventListener('resize', panelState.onViewportChange);
+    panelState = null;
+  }
   document.getElementById(PANEL_ID)?.remove();
 }
 
+function getPanelContainer(button) {
+  return button.closest('form, .comments-comment-box, .comments-comment-box__form-container, .comments-comment-item, article, [role="article"], section, div') || button.parentElement || document.body;
+}
+
+function positionPanel() {
+  const panel = document.getElementById(PANEL_ID);
+  if (!panel || !panelState) return;
+  const { button, container } = panelState;
+  if (!button.isConnected || !container.isConnected) {
+    closePanel();
+    return;
+  }
+
+  const buttonRect = button.getBoundingClientRect();
+  const inViewport = buttonRect.bottom >= 0 && buttonRect.top <= window.innerHeight && buttonRect.right >= 0 && buttonRect.left <= window.innerWidth;
+  if (!inViewport) {
+    closePanel();
+    return;
+  }
+
+  const containerRect = container.getBoundingClientRect();
+  const top = Math.max(0, buttonRect.bottom - containerRect.top + 8);
+
+  const panelWidth = panel.offsetWidth || Math.min(700, Math.max(320, window.innerWidth - 16));
+  const maxLeftInContainer = Math.max(0, container.clientWidth - panelWidth);
+  const desiredLeft = buttonRect.left - containerRect.left;
+  const minLeftFromViewport = 8 - containerRect.left;
+  const maxLeftFromViewport = window.innerWidth - panelWidth - 8 - containerRect.left;
+  const left = Math.max(0, Math.min(maxLeftInContainer, Math.max(minLeftFromViewport, Math.min(maxLeftFromViewport, desiredLeft))));
+
+  panel.style.top = `${top}px`;
+  panel.style.left = `${left}px`;
+}
+
 function showPanelNear(button, html) {
-  closePanel();
+  const container = getPanelContainer(button);
+  const sameAnchor = panelState?.button === button && panelState?.container === container;
+  if (!sameAnchor) closePanel();
+  else document.getElementById(PANEL_ID)?.remove();
+
+  const containerStyle = window.getComputedStyle(container);
+  if (containerStyle.position === 'static') container.style.position = 'relative';
+
   const panel = document.createElement('section');
   panel.className = 'ai-comment-panel';
   panel.id = PANEL_ID;
   panel.innerHTML = html;
-  document.body.appendChild(panel);
-  const rect = button.getBoundingClientRect();
-  panel.style.top = `${Math.min(window.innerHeight - 20, rect.bottom + 8)}px`;
-  panel.style.left = `${Math.max(8, Math.min(window.innerWidth - panel.offsetWidth - 8, rect.left))}px`;
+  container.appendChild(panel);
+
+  const onViewportChange = () => positionPanel();
+  panelState = { button, container, onViewportChange };
+  window.addEventListener('scroll', onViewportChange, true);
+  window.addEventListener('resize', onViewportChange);
+  positionPanel();
 }
 
 async function onAiCommentClick(button, editor) {
