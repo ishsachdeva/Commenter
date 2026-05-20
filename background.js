@@ -33,8 +33,42 @@ function removeTrailingCommas(text) {
 
 function validateAndNormalizeAiResult(parsed) {
   if (!parsed || typeof parsed !== 'object') return { ok: false, error: 'AI response could not be parsed. Please try again.' };
-  if (typeof parsed.summary !== 'string') return { ok: false, error: 'AI response could not be parsed. Please try again.' };
   if (!Array.isArray(parsed.comments)) return { ok: false, error: 'AI response could not be parsed. Please try again.' };
+
+  const fallbackPhrases = [
+    'this post shares a perspective worth engaging with',
+    'summary could not be parsed',
+    'this is worth reflecting on'
+  ];
+
+  const hasFallbackPhrase = (text) => fallbackPhrases.some((phrase) => String(text || '').toLowerCase().includes(phrase));
+
+  let summary = parsed.summary;
+  if (typeof summary === 'string') {
+    summary = {
+      subject: summary,
+      insight: '',
+      gain: '',
+      nextStep: ''
+    };
+  }
+
+  if (!summary || typeof summary !== 'object') return { ok: false, error: 'AI response could not be parsed. Please try again.' };
+
+  const normalizedSummary = {
+    subject: typeof summary.subject === 'string' ? summary.subject.trim() : '',
+    insight: typeof summary.insight === 'string' ? summary.insight.trim() : '',
+    gain: typeof summary.gain === 'string' ? summary.gain.trim() : '',
+    nextStep: typeof summary.nextStep === 'string' ? summary.nextStep.trim() : ''
+  };
+
+  if (normalizedSummary.subject.length < 40 || normalizedSummary.insight.length < 40 || normalizedSummary.gain.length < 40) {
+    return { ok: false, error: 'AI summary quality was too weak. Retrying another model.' };
+  }
+
+  if (hasFallbackPhrase(normalizedSummary.subject) || hasFallbackPhrase(normalizedSummary.insight) || hasFallbackPhrase(normalizedSummary.gain)) {
+    return { ok: false, error: 'AI summary used fallback phrasing. Retrying another model.' };
+  }
 
   const normalizedComments = parsed.comments
     .map((comment, index) => {
@@ -58,7 +92,7 @@ function validateAndNormalizeAiResult(parsed) {
   return {
     ok: true,
     data: {
-      summary: parsed.summary.trim(),
+      summary: normalizedSummary,
       comments: normalizedComments
     }
   };
@@ -74,7 +108,12 @@ function tryParseJsonCandidate(candidate) {
 
 function buildLocalFallbackFromPost(_postText) {
   return {
-    summary: 'This post shares a perspective worth engaging with.',
+    summary: {
+      subject: 'The post discusses a professional idea or situation that invites engagement.',
+      insight: 'The main takeaway could not be extracted reliably because all AI models failed.',
+      gain: 'The suggestions below are generic and should be edited before posting.',
+      nextStep: 'Retry generation later for more contextual suggestions.'
+    },
     comments: [
       { style: 'Insightful', text: 'This is an interesting perspective and it highlights a point many people overlook.' },
       { style: 'Supportive', text: 'Well said. This is a thoughtful reminder and very relevant.' },
@@ -99,7 +138,12 @@ function parsePlainTextFallback(rawText) {
 
   if (comments.length >= 2) {
     return {
-      summary: 'Summary could not be parsed, but comments were generated.',
+      summary: {
+        subject: 'The post discusses a professional idea or situation that invites engagement.',
+        insight: 'The main takeaway could not be extracted reliably from this model output.',
+        gain: 'Generated comments may still be useful but should be reviewed carefully for specificity.',
+        nextStep: 'Try regenerating with another model for a stronger contextual summary.'
+      },
       comments
     };
   }
@@ -187,7 +231,7 @@ function getStoredApiKey() {
 }
 
 function buildUserPrompt(postText) {
-  return `Extracted LinkedIn post text:\n\n${postText}\n\nWrite comments that directly reference specific ideas from this post. Avoid generic praise, vague remarks, and filler statements. Return ONLY valid JSON (no markdown, no prose) and strictly follow this exact schema:\n{"summary":"1-2 line summary of the actual post","comments":[{"style":"Insightful","text":"..."},{"style":"Supportive","text":"..."},{"style":"Question","text":"..."},{"style":"Contrarian","text":"..."}]}`;
+  return `POST TEXT:\n${postText}\n\nTASK:\nReturn ONLY valid JSON.\n\nCreate:\n\n1. summary:\nUse the S.I.G. Summary Framework.\n\nsummary.subject:\nIdentify the core topic or situation in one clear sentence.\n\nsummary.insight:\nExtract the most important realization, development, or key takeaway in one clear sentence.\n\nsummary.gain:\nExplain the outcome, implication, lesson, risk, or opportunity in one clear sentence.\n\nsummary.nextStep:\nOptional. Add one useful recommendation, future implication, or next step. If not needed, use an empty string.\n\n2. comments:\nGenerate four LinkedIn comment suggestions:\n- Insightful: adds a thoughtful angle to the post\n- Supportive: agrees while referencing a specific idea from the post\n- Question: asks a smart follow-up question\n- Contrarian: respectfully challenges or adds nuance\n\nRules:\n- Summary must be specific to the actual LinkedIn post.\n- Each summary field must be a full sentence.\n- Do not write generic summaries.\n- Do not use phrases like:\n  \"This post shares a perspective worth engaging with\"\n  \"Summary could not be parsed\"\n  \"This is worth reflecting on\"\n- Every comment must reference the actual post topic.\n- No generic praise.\n- No hashtags.\n- No fake personal experience.\n- No markdown.\n- No explanation outside JSON.\n- Response must start with { and end with }.\n\nRequired JSON shape:\n{\n  \"summary\": {\n    \"subject\": \"...\",\n    \"insight\": \"...\",\n    \"gain\": \"...\",\n    \"nextStep\": \"\"\n  },\n  \"comments\": [\n    {\"style\": \"Insightful\", \"text\": \"...\"},\n    {\"style\": \"Supportive\", \"text\": \"...\"},\n    {\"style\": \"Question\", \"text\": \"...\"},\n    {\"style\": \"Contrarian\", \"text\": \"...\"}\n  ]\n}`;
 }
 
 function shouldTryNextModel(status, text) {

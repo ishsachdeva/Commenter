@@ -278,6 +278,21 @@ function buildStatusBanner(parsed) {
   return `<div class="ai-comment-status-banner is-warning">Primary models unavailable. Generated using fallback model: ${escapeHtml(parsed.modelLabel || 'Unknown model')}</div>`;
 }
 
+function buildSummaryHtml(summary) {
+  const safeSummary = summary && typeof summary === 'object' ? summary : { subject: '', insight: '', gain: '', nextStep: '' };
+  const subject = escapeHtml(safeSummary.subject || '');
+  const insight = escapeHtml(safeSummary.insight || '');
+  const gain = escapeHtml(safeSummary.gain || '');
+  const nextStep = (safeSummary.nextStep || '').trim();
+
+  return `
+    <div class="ai-comment-summary"><strong>Subject</strong><br>${subject}</div>
+    <div class="ai-comment-summary"><strong>Insight</strong><br>${insight}</div>
+    <div class="ai-comment-summary"><strong>Gain / Impact</strong><br>${gain}</div>
+    ${nextStep ? `<div class="ai-comment-summary"><strong>Next Step</strong><br>${escapeHtml(nextStep)}</div>` : ''}
+  `;
+}
+
 async function onAiCommentClick(button, editor) {
   showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-summary">Generating suggestions…</div>');
 
@@ -313,7 +328,7 @@ async function onAiCommentClick(button, editor) {
       <div class="ai-comment-result-layout">
         <div class="ai-comment-summary-column">
           <h4>Summary</h4>
-          <div class="ai-comment-summary">${escapeHtml(parsed.summary)}</div>
+          ${buildSummaryHtml(parsed.summary)}
         </div>
         <div class="ai-comment-comments-column">
           <h4>Suggested Comments</h4>
