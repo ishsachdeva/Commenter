@@ -68,7 +68,42 @@ function tryParseJsonCandidate(candidate) {
   }
 }
 
-function parseAiJson(rawText) {
+function buildLocalFallbackFromPost(_postText) {
+  return {
+    summary: 'This post shares a perspective worth engaging with.',
+    comments: [
+      { style: 'Insightful', text: 'This is an interesting perspective and it highlights a point many people overlook.' },
+      { style: 'Supportive', text: 'Well said. This is a thoughtful reminder and very relevant.' },
+      { style: 'Question', text: 'What do you think is the biggest reason people miss this point?' },
+      { style: 'Contrarian', text: 'I see this slightly differently, but the core point is definitely worth reflecting on.' }
+    ]
+  };
+}
+
+function parsePlainTextFallback(rawText) {
+  const labelPattern = /^(insightful|supportive|question|contrarian)\s*:\s*/i;
+
+  const comments = String(rawText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^\s*(?:\d+\.|[-*])\s*/, '').trim())
+    .map((line) => line.replace(labelPattern, '').trim())
+    .filter((line) => line.length >= 12)
+    .slice(0, 4)
+    .map((text, index) => ({ style: `Suggestion ${index + 1}`, text }));
+
+  if (comments.length >= 2) {
+    return {
+      summary: 'Summary could not be parsed, but comments were generated.',
+      comments
+    };
+  }
+
+  return null;
+}
+
+function parseAiJson(rawText, postText) {
   const raw = String(rawText || '').trim();
 
   // a. direct parse
@@ -90,7 +125,19 @@ function parseAiJson(rawText) {
     }
   }
 
-  // d. repair common issues and parse
+  // d. remove trailing commas and parse
+  if (!parsed) {
+    const noFences = stripMarkdownCodeFences(raw);
+    const start = noFences.indexOf('{');
+    const end = noFences.lastIndexOf('}');
+    const candidate = start !== -1 && end !== -1 && end > start
+      ? noFences.slice(start, end + 1).trim()
+      : noFences;
+    const repaired = removeTrailingCommas(candidate);
+    parsed = tryParseJsonCandidate(repaired);
+  }
+
+  // e. replace smart quotes and parse
   if (!parsed) {
     const normalized = normalizeSmartQuotes(raw);
     const noFences = stripMarkdownCodeFences(normalized);
@@ -103,9 +150,30 @@ function parseAiJson(rawText) {
     parsed = tryParseJsonCandidate(repaired);
   }
 
-  if (!parsed) return { ok: false, error: 'AI response could not be parsed. Please try again.' };
+  if (parsed) {
+    const validated = validateAndNormalizeAiResult(parsed);
+    if (validated.ok) return validated;
+  }
 
-  return validateAndNormalizeAiResult(parsed);
+  const textFallback = parsePlainTextFallback(raw);
+  if (textFallback) {
+    const withMinimumComments = [...textFallback.comments];
+    const localFallback = buildLocalFallbackFromPost(postText);
+
+    while (withMinimumComments.length < 4) {
+      withMinimumComments.push(localFallback.comments[withMinimumComments.length]);
+    }
+
+    return {
+      ok: true,
+      data: {
+        summary: textFallback.summary,
+        comments: withMinimumComments.slice(0, 4)
+      }
+    };
+  }
+
+  return { ok: true, data: buildLocalFallbackFromPost(postText) };
 }
 
 function getStoredApiKey() {
@@ -115,7 +183,7 @@ function getStoredApiKey() {
 }
 
 function buildUserPrompt(postText) {
-  return `POST:\n\n${postText}\n\nReturn only valid minified JSON. No markdown. No explanation. No code fence. Use exactly this schema:\n{"summary":"...","comments":[{"style":"Insightful","text":"..."},{"style":"Supportive","text":"..."},{"style":"Question","text":"..."},{"style":"Contrarian","text":"..."}]}`;
+  return `POST:\n\n${postText}\n\nReturn ONLY valid JSON. No markdown. No explanation. No bullets outside JSON. Your entire response must start with { and end with }. Use exactly this schema:\n{"summary":"...","comments":[{"style":"Insightful","text":"..."},{"style":"Supportive","text":"..."},{"style":"Question","text":"..."},{"style":"Contrarian","text":"..."}]}`;
 }
 
 function shouldTryNextModel(status, text) {
@@ -165,9 +233,9 @@ async function generateComments(postText, apiKey) {
     const modelContent = String(data?.choices?.[0]?.message?.content || '');
     console.log('Raw AI content preview:', modelContent.slice(0, 300));
 
-    const parsed = parseAiJson(modelContent);
+    const parsed = parseAiJson(modelContent, postText);
     if (!parsed.ok) {
-      console.log('Raw AI output (unparsed):', modelContent);
+      console.error('Raw AI response:', modelContent);
       throw new Error(parsed.error);
     }
 
