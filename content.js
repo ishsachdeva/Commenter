@@ -30,6 +30,9 @@ function injectStyles() {
     .ai-comment-panel { position: fixed; z-index: 2147483000; width: min(92vw, 720px); min-width: 320px; max-width: 720px; max-height: min(68vh, 640px); overflow: auto; background: #fff; border: 1px solid #d0d0d0; border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,.24); padding: 12px; }
     .ai-comment-panel h4 { margin: 0 0 6px 0; font-size: 13px; }
     .ai-comment-summary { font-size: 12px; margin-bottom: 8px; color: #333; }
+    .ai-comment-status-banner { font-size: 12px; margin: 0 0 10px 0; padding: 8px 10px; border-radius: 6px; border: 1px solid #c8daf0; background: #eef5fc; color: #0a3d75; }
+    .ai-comment-status-banner.is-warning { border-color: #f2d38a; background: #fff5dd; color: #7a4d00; }
+    .ai-comment-status-banner.is-danger { border-color: #efb7bc; background: #fdecee; color: #8c1d2a; }
     .ai-comment-result-layout { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(280px, 1.6fr); gap: 12px; align-items: start; }
     .ai-comment-summary-column, .ai-comment-comments-column { min-width: 0; }
     .ai-comment-comments-column { display: grid; gap: 6px; }
@@ -265,6 +268,16 @@ function showPanelNear(button, html) {
   positionPanel();
 }
 
+function buildStatusBanner(parsed) {
+  if (parsed?.usedLocalFallback) {
+    return '<div class="ai-comment-status-banner is-danger">All free AI models failed or were rate-limited. Showing generic fallback suggestions.</div>';
+  }
+  if (parsed?.fallbackLevel === 'primary') {
+    return `<div class="ai-comment-status-banner">Generated using: ${escapeHtml(parsed.modelLabel || 'Unknown model')}</div>`;
+  }
+  return `<div class="ai-comment-status-banner is-warning">Primary models unavailable. Generated using fallback model: ${escapeHtml(parsed.modelLabel || 'Unknown model')}</div>`;
+}
+
 async function onAiCommentClick(button, editor) {
   showPanelNear(button, '<h4>AI Comment</h4><div class="ai-comment-summary">Generating suggestions…</div>');
 
@@ -296,6 +309,7 @@ async function onAiCommentClick(button, editor) {
     showPanelNear(
       button,
       `<h4>AI Comment</h4>
+      ${buildStatusBanner(parsed)}
       <div class="ai-comment-result-layout">
         <div class="ai-comment-summary-column">
           <h4>Summary</h4>
