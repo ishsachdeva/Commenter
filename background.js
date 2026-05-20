@@ -1,11 +1,15 @@
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL_FALLBACKS = [
-  'openrouter/free',
-  'openai/gpt-oss-20b:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'qwen/qwen3-next-80b-a3b-instruct:free',
-  'google/gemma-3-27b-it:free',
-  'deepseek/deepseek-chat-v3-0324:free'
+const FREE_MODEL_POOL = [
+  { id: 'deepseek/deepseek-v4-flash:free', tier: 'quality', label: 'DeepSeek V4 Flash' },
+  { id: 'openai/gpt-oss-120b:free', tier: 'quality', label: 'OpenAI GPT OSS 120B' },
+  { id: 'deepseek/deepseek-v3.1:free', tier: 'quality', label: 'DeepSeek V3.1' },
+  { id: 'deepseek/deepseek-chat-v3-0324:free', tier: 'quality', label: 'DeepSeek Chat V3' },
+  { id: 'qwen/qwen3-next-80b-a3b-instruct:free', tier: 'quality', label: 'Qwen3 Next 80B' },
+  { id: 'meta-llama/llama-3.3-70b-instruct:free', tier: 'quality', label: 'Llama 3.3 70B' },
+  { id: 'google/gemma-3-27b-it:free', tier: 'balanced', label: 'Gemma 3 27B' },
+  { id: 'nvidia/nemotron-3-nano-30b-a3b:free', tier: 'fallback', label: 'NVIDIA Nemotron 3 Nano 30B' },
+  { id: 'openai/gpt-oss-20b:free', tier: 'fallback', label: 'OpenAI GPT OSS 20B' },
+  { id: 'openrouter/free', tier: 'router', label: 'OpenRouter Free Router' }
 ];
 
 function stripMarkdownCodeFences(text) {
@@ -173,7 +177,7 @@ function parseAiJson(rawText, postText) {
     };
   }
 
-  return { ok: true, data: buildLocalFallbackFromPost(postText) };
+  return { ok: false, error: 'Unable to parse valid structured output from model.' };
 }
 
 function getStoredApiKey() {
@@ -183,7 +187,7 @@ function getStoredApiKey() {
 }
 
 function buildUserPrompt(postText) {
-  return `POST:\n\n${postText}\n\nReturn ONLY valid JSON. No markdown. No explanation. No bullets outside JSON. Your entire response must start with { and end with }. Use exactly this schema:\n{"summary":"...","comments":[{"style":"Insightful","text":"..."},{"style":"Supportive","text":"..."},{"style":"Question","text":"..."},{"style":"Contrarian","text":"..."}]}`;
+  return `Extracted LinkedIn post text:\n\n${postText}\n\nWrite comments that directly reference specific ideas from this post. Avoid generic praise, vague remarks, and filler statements. Return ONLY valid JSON (no markdown, no prose) and strictly follow this exact schema:\n{"summary":"1-2 line summary of the actual post","comments":[{"style":"Insightful","text":"..."},{"style":"Supportive","text":"..."},{"style":"Question","text":"..."},{"style":"Contrarian","text":"..."}]}`;
 }
 
 function shouldTryNextModel(status, text) {
@@ -197,53 +201,98 @@ function shouldTryNextModel(status, text) {
 
 async function generateComments(postText, apiKey) {
   const messages = [
-    { role: 'system', content: 'You generate high-quality LinkedIn comment suggestions.' },
+    { role: 'system', content: 'You are an expert LinkedIn engagement writer. Write thoughtful, highly contextual comments that directly reference the post content. Avoid generic praise. Avoid vague statements. Each comment should feel human, specific, and naturally conversational.' },
     { role: 'user', content: buildUserPrompt(postText) }
   ];
 
-  for (const model of MODEL_FALLBACKS) {
-    const response = await fetch(OPENROUTER_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model,
-        response_format: { type: 'json_object' },
-        messages
-      })
-    });
+  const attemptedModels = [];
 
-    const rawResponseText = await response.text();
-    console.log('[OpenRouter] Attempt', { model, status: response.status, preview: rawResponseText.slice(0, 200) });
+  for (let index = 0; index < FREE_MODEL_POOL.length; index += 1) {
+    const modelEntry = FREE_MODEL_POOL[index];
+    attemptedModels.push(modelEntry.id);
+    console.log('[OpenRouter] model attempted:', modelEntry.id);
+    let response;
+    let rawResponseText = '';
+
+    try {
+      response = await fetch(OPENROUTER_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: modelEntry.id,
+          response_format: { type: 'json_object' },
+          messages
+        })
+      });
+      rawResponseText = await response.text();
+    } catch (networkError) {
+      console.warn('[OpenRouter] moving to next model due to network failure:', modelEntry.id, networkError);
+      continue;
+    }
+
+    console.log('[OpenRouter] status code:', response.status);
+    console.log('[OpenRouter] raw response preview:', rawResponseText.slice(0, 300));
 
     if (!response.ok) {
-      if (shouldTryNextModel(response.status, rawResponseText)) continue;
-      throw new Error(`OpenRouter request failed (${response.status}): ${rawResponseText.slice(0, 200) || response.statusText}`);
+      if (response.status === 400 || shouldTryNextModel(response.status, rawResponseText)) {
+        console.warn('[OpenRouter] moving to next model due to HTTP status:', response.status, modelEntry.id);
+        continue;
+      }
+      console.warn('[OpenRouter] moving to next model due to non-ok response:', response.status, modelEntry.id);
+      continue;
     }
 
     let data;
     try {
       data = JSON.parse(rawResponseText);
-    } catch {
-      throw new Error('Invalid JSON received from OpenRouter API');
+    } catch (error) {
+      console.warn('[OpenRouter] parse failure on API envelope, moving to next model:', modelEntry.id, error);
+      continue;
     }
 
     const modelContent = String(data?.choices?.[0]?.message?.content || '');
-    console.log('Raw AI content preview:', modelContent.slice(0, 300));
+    if (!modelContent.trim()) {
+      console.warn('[OpenRouter] moving to next model due to empty response content:', modelEntry.id);
+      continue;
+    }
+
+    console.log('[OpenRouter] model content preview:', modelContent.slice(0, 300));
 
     const parsed = parseAiJson(modelContent, postText);
     if (!parsed.ok) {
-      console.error('Raw AI response:', modelContent);
-      throw new Error(parsed.error);
+      console.warn('[OpenRouter] parse failure, moving to next model:', modelEntry.id, parsed.error);
+      continue;
     }
 
-    console.log('[OpenRouter] Selected successful model:', model);
-    return parsed.data;
+    console.log('[OpenRouter] parse success for model:', modelEntry.id);
+    const fallbackLevel = index === 0 ? 'primary' : 'model_fallback';
+    console.log('[OpenRouter] final model used:', modelEntry.id);
+    console.log('[OpenRouter] local fallback activated: false');
+    return {
+      ...parsed.data,
+      modelUsed: modelEntry.id,
+      modelLabel: modelEntry.label,
+      modelTier: modelEntry.tier,
+      fallbackLevel,
+      attemptedModels,
+      usedLocalFallback: false
+    };
   }
 
-  throw new Error('All free models are currently unavailable or rate-limited. Please try again later.');
+  const localFallback = buildLocalFallbackFromPost(postText);
+  console.warn('[OpenRouter] local fallback activated after all free models failed');
+  return {
+    ...localFallback,
+    modelUsed: null,
+    modelLabel: null,
+    modelTier: null,
+    fallbackLevel: 'local_fallback',
+    attemptedModels,
+    usedLocalFallback: true
+  };
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
