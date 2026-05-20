@@ -125,6 +125,29 @@ function buildLocalFallbackFromPost(_postText) {
 
 function parsePlainTextFallback(rawText) {
   const labelPattern = /^(insightful|supportive|question|contrarian)\s*:\s*/i;
+  const blockedStarts = ['summary', 'comments', 'style', 'text', '{', '}', '[', ']'];
+
+  function isMostlyJsonSyntax(line) {
+    if (!line) return false;
+    const cleaned = line.replace(/\s/g, '');
+    if (!cleaned) return true;
+    const jsonishChars = (cleaned.match(/[{}[\]":,]/g) || []).length;
+    return (jsonishChars / cleaned.length) >= 0.5;
+  }
+
+  function isOnlyPunctuationLike(line) {
+    if (!line) return true;
+    return /^[\s`"'“”‘’.,:;!?()[\]{}<>\\/_\-+=|~*]+$/.test(line);
+  }
+
+  function looksLikePartialJson(line) {
+    const low = line.toLowerCase();
+    if (/^"?(summary|comments|style|text)"?\s*:/.test(low)) return true;
+    if (/^"?\w+"?\s*:\s*(\{|\[)?\s*$/.test(line)) return true;
+    if (/^[\[\{].*[\]\}]?$/.test(line) && /[:,"]/.test(line)) return true;
+    if (/,\s*$/.test(line) && /[:,"]/.test(line)) return true;
+    return false;
+  }
 
   const comments = String(rawText || '')
     .split(/\r?\n/)
@@ -132,6 +155,14 @@ function parsePlainTextFallback(rawText) {
     .filter(Boolean)
     .map((line) => line.replace(/^\s*(?:\d+\.|[-*])\s*/, '').trim())
     .map((line) => line.replace(labelPattern, '').trim())
+    .filter((line) => {
+      const low = line.toLowerCase();
+      if (blockedStarts.some((prefix) => low.startsWith(prefix))) return false;
+      if (isMostlyJsonSyntax(line)) return false;
+      if (isOnlyPunctuationLike(line)) return false;
+      if (looksLikePartialJson(line)) return false;
+      return true;
+    })
     .filter((line) => line.length >= 12)
     .slice(0, 4)
     .map((text, index) => ({ style: `Suggestion ${index + 1}`, text }));
@@ -153,49 +184,42 @@ function parsePlainTextFallback(rawText) {
 
 function parseAiJson(rawText, postText) {
   const raw = String(rawText || '').trim();
+  const noFencesRaw = stripMarkdownCodeFences(raw);
+
+  function extractLikelyJsonObject(text) {
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start === -1 || end === -1 || end <= start) return null;
+    return text.slice(start, end + 1).trim();
+  }
+
+  function tryRepairAndParse(text) {
+    if (!text) return null;
+    const candidates = [text, extractLikelyJsonObject(text)].filter(Boolean);
+    for (const candidate of candidates) {
+      const repaired = removeTrailingCommas(normalizeSmartQuotes(candidate));
+      const parsedCandidate = tryParseJsonCandidate(repaired);
+      if (parsedCandidate) return parsedCandidate;
+    }
+    return null;
+  }
 
   // a. direct parse
   let parsed = tryParseJsonCandidate(raw);
 
   // b. strip fences and parse
   if (!parsed) {
-    const noFences = stripMarkdownCodeFences(raw);
-    parsed = tryParseJsonCandidate(noFences);
+    parsed = tryParseJsonCandidate(noFencesRaw);
   }
 
   // c. extract first object braces and parse
   if (!parsed) {
-    const start = raw.indexOf('{');
-    const end = raw.lastIndexOf('}');
-    if (start !== -1 && end !== -1 && end > start) {
-      const objectSlice = raw.slice(start, end + 1).trim();
-      parsed = tryParseJsonCandidate(objectSlice);
-    }
+    parsed = tryParseJsonCandidate(extractLikelyJsonObject(raw));
   }
 
-  // d. remove trailing commas and parse
+  // d. repair likely JSON (smart quotes + trailing commas), then parse
   if (!parsed) {
-    const noFences = stripMarkdownCodeFences(raw);
-    const start = noFences.indexOf('{');
-    const end = noFences.lastIndexOf('}');
-    const candidate = start !== -1 && end !== -1 && end > start
-      ? noFences.slice(start, end + 1).trim()
-      : noFences;
-    const repaired = removeTrailingCommas(candidate);
-    parsed = tryParseJsonCandidate(repaired);
-  }
-
-  // e. replace smart quotes and parse
-  if (!parsed) {
-    const normalized = normalizeSmartQuotes(raw);
-    const noFences = stripMarkdownCodeFences(normalized);
-    const start = noFences.indexOf('{');
-    const end = noFences.lastIndexOf('}');
-    const candidate = start !== -1 && end !== -1 && end > start
-      ? noFences.slice(start, end + 1).trim()
-      : noFences;
-    const repaired = removeTrailingCommas(candidate);
-    parsed = tryParseJsonCandidate(repaired);
+    parsed = tryRepairAndParse(noFencesRaw) || tryRepairAndParse(raw);
   }
 
   if (parsed) {
