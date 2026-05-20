@@ -10,16 +10,95 @@ function stripMarkdownCodeFences(text) {
     .trim();
 }
 
-function safelyParseAiJson(rawText) {
-  const cleaned = stripMarkdownCodeFences(rawText);
+function normalizeSmartQuotes(text) {
+  return (text || '')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"');
+}
+
+function removeTrailingCommas(text) {
+  return (text || '').replace(/,\s*([}\]])/g, '$1');
+}
+
+function validateAndNormalizeAiResult(parsed) {
+  if (!parsed || typeof parsed !== 'object') return { ok: false, error: 'AI response could not be parsed. Please try again.' };
+  if (typeof parsed.summary !== 'string') return { ok: false, error: 'AI response could not be parsed. Please try again.' };
+  if (!Array.isArray(parsed.comments)) return { ok: false, error: 'AI response could not be parsed. Please try again.' };
+
+  const normalizedComments = parsed.comments
+    .map((comment, index) => {
+      if (typeof comment === 'string') {
+        const text = comment.trim();
+        if (!text) return null;
+        return { style: `Comment ${index + 1}`, text };
+      }
+
+      if (!comment || typeof comment !== 'object') return null;
+
+      const style = typeof comment.style === 'string' ? comment.style.trim() : '';
+      const text = typeof comment.text === 'string' ? comment.text.trim() : '';
+      if (!style || !text) return null;
+      return { style, text };
+    })
+    .filter(Boolean);
+
+  if (normalizedComments.length < 4) return { ok: false, error: 'AI returned fewer than 4 usable comments.' };
+
+  return {
+    ok: true,
+    data: {
+      summary: parsed.summary.trim(),
+      comments: normalizedComments
+    }
+  };
+}
+
+function tryParseJsonCandidate(candidate) {
   try {
-    const parsed = JSON.parse(cleaned);
-    if (typeof parsed?.summary !== 'string' || !Array.isArray(parsed?.comments) || parsed.comments.length !== 4) return null;
-    if (!parsed.comments.every((c) => typeof c?.style === 'string' && typeof c?.text === 'string')) return null;
-    return parsed;
+    return JSON.parse(candidate);
   } catch {
     return null;
   }
+}
+
+function parseAiJson(rawText) {
+  const raw = String(rawText || '').trim();
+
+  // a. direct parse
+  let parsed = tryParseJsonCandidate(raw);
+
+  // b. strip fences and parse
+  if (!parsed) {
+    const noFences = stripMarkdownCodeFences(raw);
+    parsed = tryParseJsonCandidate(noFences);
+  }
+
+  // c. extract first object braces and parse
+  if (!parsed) {
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start !== -1 && end !== -1 && end > start) {
+      const objectSlice = raw.slice(start, end + 1).trim();
+      parsed = tryParseJsonCandidate(objectSlice);
+    }
+  }
+
+  // d. repair common issues and parse
+  if (!parsed) {
+    const normalized = normalizeSmartQuotes(raw);
+    const noFences = stripMarkdownCodeFences(normalized);
+    const start = noFences.indexOf('{');
+    const end = noFences.lastIndexOf('}');
+    const candidate = start !== -1 && end !== -1 && end > start
+      ? noFences.slice(start, end + 1).trim()
+      : noFences;
+    const repaired = removeTrailingCommas(candidate);
+    parsed = tryParseJsonCandidate(repaired);
+  }
+
+  if (!parsed) return { ok: false, error: 'AI response could not be parsed. Please try again.' };
+
+  return validateAndNormalizeAiResult(parsed);
 }
 
 function getStoredApiKey() {
@@ -29,7 +108,7 @@ function getStoredApiKey() {
 }
 
 function buildUserPrompt(postText) {
-  return `POST:\n\n${postText}\n\nReturn STRICT JSON ONLY:\n{\n  "summary": "1-2 line summary",\n  "comments": [\n    {"style":"Insightful","text":"..."},\n    {"style":"Supportive","text":"..."},\n    {"style":"Question","text":"..."},\n    {"style":"Contrarian","text":"..."}\n  ]\n}`;
+  return `POST:\n\n${postText}\n\nReturn only valid minified JSON. No markdown. No explanation. No code fence. Use exactly this schema:\n{"summary":"...","comments":[{"style":"Insightful","text":"..."},{"style":"Supportive","text":"..."},{"style":"Question","text":"..."},{"style":"Contrarian","text":"..."}]}`;
 }
 
 async function generateComments(postText, apiKey) {
@@ -41,6 +120,7 @@ async function generateComments(postText, apiKey) {
     },
     body: JSON.stringify({
       model: MODEL_NAME,
+      response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: 'You generate high-quality LinkedIn comment suggestions.' },
         { role: 'user', content: buildUserPrompt(postText) }
@@ -60,10 +140,16 @@ async function generateComments(postText, apiKey) {
     throw new Error('Invalid JSON received from OpenRouter API');
   }
 
-  const modelContent = data?.choices?.[0]?.message?.content || '';
-  const parsed = safelyParseAiJson(modelContent);
-  if (!parsed) throw new Error('AI returned invalid JSON format');
-  return parsed;
+  const modelContent = String(data?.choices?.[0]?.message?.content || '');
+  console.log('Raw AI content preview:', modelContent.slice(0, 300));
+
+  const parsed = parseAiJson(modelContent);
+  if (!parsed.ok) {
+    console.log('Raw AI output (unparsed):', modelContent);
+    throw new Error(parsed.error);
+  }
+
+  return parsed.data;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
